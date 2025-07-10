@@ -41,17 +41,13 @@ sim_time_lst = []
 
 start_time = simtime.time()
 
-#Kalman Filter Initialization
+# Kalman Filter Initialization (XY)
 sigma_process_accel_xy = 0.5
 sigma_accel_sensor_xy = 0.5
-
-# For Z-axis (most critical for altitude/velocity)
-# If velocity/position is still too high or drifts, increase sigma_process_accel_z.
-# If estimated Z-accel is too noisy, increase sigma_accel_sensor_z.
-# If estimated Z-position is too noisy or not tracking altimeter well, decrease sigma_altimeter_sensor.
-sigma_process_accel_z = 1.0
-sigma_accel_sensor_z = 0.5
-sigma_altimeter_sensor = 0.5
+# Kalman Filter Initialization (Z) (most critical for altitude/velocity)
+sigma_process_accel_z = 1.0 # increase if velocity/position is still too high or drifts
+sigma_accel_sensor_z = 0.5 # increase if estimated Z-accel is too noisy
+sigma_altimeter_sensor = 0.5 # decrease if estimated Z-position is too noisy or not tracking altimeter well
 
 kf_x, kf_y, kf_z, last_time = kal.initialize_kalman_filters(sigma_accel_sensor_xy,
                                                             sigma_accel_sensor_z,
