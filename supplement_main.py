@@ -2,7 +2,7 @@
 This singular file is intended to supplement all
 the different .py files to potentially improve efficiency.
 
-Autho(s): Alex Kult (@Alex-Kult), Dominik Bartsch (@dominob101)
+Author(s): Alex Kult (@Alex-Kult), Dominik Bartsch (@dominob101)
 Date: 6-24-2025
 Copyright Alpha Kappa Sigma
 
@@ -14,7 +14,7 @@ filter.py imports filterpy
 apogee_lib.py, flight.py import scipy
 flight.py imports time
 
-Checked:
+The following python files have been incorporated:
 constants.py
 convert.py
 environment.py
@@ -23,8 +23,6 @@ math_lib.py
 vehicle.py
 apogee_lib.py
 apogee.py
-
-Not yet checked:
 flight.py
 
 Functions here to stay:
@@ -44,8 +42,11 @@ rk4_step (fourth-order runge-kutta )
 """
 
 from scipy.interpolate import RegularGridInterpolator
+from scipy.spatial.transform import Rotation
 from filterpy.kalman import KalmanFilter
+import matplotlib.pyplot as plt
 import numpy as np
+import time as simtime
 
 
 class Vehicle:
@@ -63,6 +64,8 @@ class Vehicle:
     def __init__(
         self,
         cfd_filename: str = None,
+        flight_log_filename: str = None,
+        in_flight: bool = False,
     ):
         """
         The following method is run upon the declaration of the object.
@@ -70,10 +73,13 @@ class Vehicle:
             environment parameters, wind conditions, Kalman filter
             inputs, and general scientific constants.
         It also initializes the Kalman filters for x, y, & z.
-        It also
+        It also runs through the CFD data
+        It also analyzes flight data with plotting if not in live flight.
 
         Args:
             cfd_filename (str): name of the cfd file that is being read.
+            flight_log_filename (str): name of the flight log filename that is being read.
+            in_flight (bool): True if this is the microcomputer using it for actual flight.
         """
         # __________ CONSTANTS __________
         # --- Inputs assigned to object ---
@@ -225,6 +231,324 @@ class Vehicle:
             fill_value=None,
         )
         # *Audibly inhales* so pwofessow...
+
+        # __________ Flight Data __________
+        # checks that there is a name - CHANGE FOR LIVE DATA
+        if not flight_log_filename:
+            if in_flight is True:
+                # HERE IS WHERE THE FUTURE PACKAGE FOR THE PI ITSELF GOES
+                pass
+            else:
+                raise Exception(
+                    "Please specify the name of the file for the flight log."
+                )
+        # extracting data from flight log for live processing
+        else:
+            flight_log = np.loadtxt(
+                flight_log_filename, delimiter=",", dtype=float, skiprows=1
+            )
+            self.filtered_flight_log = np.zeros(
+                (len(flight_log), 13)
+            )  # [time, x_pos, y_pos, z_pos, x_vel, y_vel, z_vel, x_acc_filt, y_acc_filt, z_acc_filt, x_acc_rot, y_acc_rot, z_acc_rot]
+            # Starting assumptions
+            status = "ground"
+            zenith = 0
+            state = np.zeros((3, 4))
+            # Initialization of vectors (lists) used for plotting
+            alt_lst = []
+            apg_lst = []
+            t_apg_lst = []
+            sim_time_lst = []
+            # Zeroing time
+            start_time = simtime.time()
+            # Loop through points in flight log
+            for idx in range(len(flight_log)):
+                flight_data = flight_log[idx, :]
+                # Sensor inputs
+                alt_meas = flight_data[1] / self.m2ft
+                acc_bno_meas = flight_data[4:7]
+                acc_icm_meas = flight_data[17:20]
+                quaternion = flight_data[13:17]
+                gyro = flight_data[10:13]
+                time = flight_data[0]
+                # Determine acceleration sensor reading
+                if status == "ground" or status == "burn":
+                    acc_meas = acc_icm_meas
+                else:
+                    acc_meas = acc_bno_meas
+                    # Consistent sensor frame
+                    x, y, z = acc_meas[0], acc_meas[1], acc_meas[2]
+                    acc_meas[0] = -y
+                    acc_meas[1] = x
+                    acc_meas[2] = z
+                # Prepare sensor fusion
+                if status == "ground":
+                    quaternion_old = flight_log[idx - 1, 13:17]  # last quaternion
+                if status == "burn" or status == "coast":
+                    # At high accelerations, the BNO085's orientation determination is unreliable.
+                    # For this reason, manual sensor fusion is used.
+                    # NOTE: Gyro drift starts to kick in pretty heavily after around 15-20 seconds.
+                    # Calculate quaternions manually using gyro (fusion)
+                    # Use more accurate fusion algorithm if we have enough processing power
+                    dt = time - self.last_time
+                    quaternion = self.teasley_filter(quaternion_old, gyro, dt)
+                    quaternion_old = quaternion
+                # Sensor frame to body frame
+                x, y, z = acc_meas[0], acc_meas[1], acc_meas[2]
+                acc_meas[0] = z
+                acc_meas[1] = y
+                acc_meas[2] = x
+                # Calculate euler angles and zenith angle [rad]
+                zenith_old = zenith
+                euler = self.quatern2euler(quaternion)
+                yaw, pitch, roll = euler
+                zenith = self.euler2zenith(euler)
+                # Body frame to global frame
+                r = Rotation.from_euler("y", np.degrees(zenith) - 90, degrees=True)
+                acc_i = r.apply(acc_meas)
+                acc_i[2] -= self.g
+                ax_meas, ay_meas, az_meas = acc_i
+                # Use kalman filter on acceleration and altitude data
+                self.kf_x, self.kf_y, self.kf_z, self.last_time, current_estimates = (
+                    self.update_kalman_filters(
+                        self.kf_x,
+                        self.kf_y,
+                        self.kf_z,
+                        self.last_time,
+                        time,
+                        ax_meas,
+                        ay_meas,
+                        az_meas,
+                        alt_meas,
+                        self.sigma_process_accel_xy,
+                        self.sigma_process_accel_z,
+                    )
+                )
+                # Store filtered results
+                self.filtered_flight_log[idx, :] = np.hstack((current_estimates, acc_i))
+                pos_z = current_estimates[3]
+                vel_z = current_estimates[6]
+                acc_z = current_estimates[9]
+                # Apogee Prediction
+                if status == "coast":
+                    loop_start_time = simtime.time()
+                    # Downrange Conditions
+                    pos_horz = np.linalg.norm(np.array(current_estimates[1:3]))
+                    vel_horz = np.linalg.norm(np.array(current_estimates[4:6]))
+                    # Estimate angular velocty along pitch axis (improve later with gyro sensor readings)
+                    omega = (zenith - zenith_old) / dt
+                    # Initializing state matrix
+                    state[:2, 0] = [pos_z, pos_horz]
+                    state[:2, 1] = [vel_z, vel_horz]
+                    state[2, 2] = zenith
+                    state[2, 3] = omega
+                    # Predict apogee
+                    apogee = self.apogee_pred(state)
+                    loop_end_time = simtime.time()
+                    loop_time = loop_end_time - loop_start_time
+                    # Append info to lists for plotting
+                    alt_lst.append(pos_z)
+                    apg_lst.append(apogee)
+                    t_apg_lst.append(time)
+                    sim_time_lst.append(loop_time)
+                # State determination
+                if acc_z > 5 and abs(pos_z) > 1 and status == "ground":
+                    status = "burn"
+                    t_burn = time
+                    print(f"Engine burn at t = {time:.4f} seconds.")
+                elif (
+                    acc_z < 0
+                    and pos_z < self.apg_target
+                    and vel_z > 0
+                    and status == "burn"
+                ):
+                    status = "coast"
+                    t_burnout = time
+                    print(f"Engine burnout at t = {time:.4f} seconds.")
+                elif acc_z < 0 and pos_z >= self.apg_target and status == "coast":
+                    status = "overshoot"
+                    print(f"Overshoot at t = {time:.4f} seconds.")
+                elif (
+                    acc_z < 0
+                    and vel_z <= 0
+                    and (status == "overshoot" or status == "coast")
+                ):
+                    status = "descent"
+                    apogee = pos_z
+                    t_apogee = time
+                    print(
+                        f"Apogee of {apogee:.4f} m reached at t = {t_apogee:.4f} seconds."
+                    )
+
+            # Calculating Simulation Time and Frequency Information
+            end_time = simtime.time()
+            tot_time = end_time - start_time
+            print(f"Total Simulation Time: {tot_time:.4f} seconds.")
+
+            t_sim_lst = [
+                t_apg_lst[t] for t in range(len(sim_time_lst)) if sim_time_lst[t] != 0
+            ]
+            sim_time_lst = [val for val in sim_time_lst if val != 0]
+            hertz_lst = [1 / t if t != 0 else 0 for t in sim_time_lst]
+            print(f"Minimum Simulation Hertz: {np.min(hertz_lst):.4f} Hz.")
+
+            # --- Plotting ---
+            # Plotting Apogee Prediction Throughout Coast
+            plt.plot(t_apg_lst, alt_lst, label="Altitude")
+            plt.plot(t_apg_lst, apg_lst, label="Predicted Apogee")
+            plt.axhline(apogee, label="Apogee", color="g")
+            plt.xlabel("Time [s]")
+            plt.ylabel("Altitude [m]")
+            plt.title("Apogee Prediction")
+            plt.legend()
+            plt.grid()
+            plt.show()
+
+            # Plotting Filtered Position, Velocity, and Acceleration Data (Global Frame)
+            plt.figure(figsize=(15, 15))
+            times = self.filtered_flight_log[:, 0]
+
+            # X-axis plots
+            plt.subplot(3, 3, 1)
+            plt.plot(
+                times, self.filtered_flight_log[:, 1], label="Estimated X Position"
+            )
+            plt.axvline(t_burn, label="Burn", color="k")
+            plt.axvline(t_burnout, label="Burnout", color="r")
+            plt.axvline(t_apogee, label="Apogee", color="g")
+            plt.ylabel("X Position [m]")
+            plt.title("X-axis Estimates")
+            plt.legend()
+            plt.grid()
+
+            plt.subplot(3, 3, 4)
+            plt.plot(
+                times, self.filtered_flight_log[:, 4], label="Estimated X Velocity"
+            )
+            plt.axvline(t_burn, label="Burn", color="k")
+            plt.axvline(t_burnout, label="Burnout", color="r")
+            plt.axvline(t_apogee, label="Apogee", color="g")
+            plt.ylabel("X Velocity [m/s]")
+            plt.legend()
+            plt.grid()
+
+            plt.subplot(3, 3, 7)
+            plt.plot(
+                times,
+                self.filtered_flight_log[:, 10],
+                label="Raw X Acceleration",
+                alpha=0.6,
+            )
+            plt.plot(
+                times, self.filtered_flight_log[:, 7], label="Estimated X Acceleration"
+            )
+            plt.axvline(t_burn, label="Burn", color="k")
+            plt.axvline(t_burnout, label="Burnout", color="r")
+            plt.axvline(t_apogee, label="Apogee", color="g")
+            plt.xlabel("Time [s]")
+            plt.ylabel("X Acceleration [m/s^2]")
+            plt.legend()
+            plt.grid()
+
+            # Y-axis plots
+            plt.subplot(3, 3, 2)
+            plt.plot(
+                times, self.filtered_flight_log[:, 2], label="Estimated Y Position"
+            )
+            plt.axvline(t_burn, label="Burn", color="k")
+            plt.axvline(t_burnout, label="Burnout", color="r")
+            plt.axvline(t_apogee, label="Apogee", color="g")
+            plt.ylabel("Y Position [m]")
+            plt.title("Y-axis Estimates")
+            plt.legend()
+            plt.grid()
+
+            plt.subplot(3, 3, 5)
+            plt.plot(
+                times, self.filtered_flight_log[:, 5], label="Estimated Y Velocity"
+            )
+            plt.axvline(t_burn, label="Burn", color="k")
+            plt.axvline(t_burnout, label="Burnout", color="r")
+            plt.axvline(t_apogee, label="Apogee", color="g")
+            plt.ylabel("Y Velocity [m/s]")
+            plt.legend()
+            plt.grid()
+
+            plt.subplot(3, 3, 8)
+            plt.plot(
+                times,
+                self.filtered_flight_log[:, 11],
+                label="Raw Y Acceleration",
+                alpha=0.6,
+            )
+            plt.plot(
+                times, self.filtered_flight_log[:, 8], label="Estimated Y Acceleration"
+            )
+            plt.axvline(t_burn, label="Burn", color="k")
+            plt.axvline(t_burnout, label="Burnout", color="r")
+            plt.axvline(t_apogee, label="Apogee", color="g")
+            plt.xlabel("Time [s]")
+            plt.ylabel("Y Acceleration [m/s^2]")
+            plt.legend()
+            plt.grid()
+
+            # Z-axis plots
+            plt.subplot(3, 3, 3)
+            plt.plot(
+                times, flight_log[:, 1] / self.m2ft, label="Raw Altimeter", alpha=0.6
+            )
+            plt.plot(
+                times, self.filtered_flight_log[:, 3], label="Estimated Z Position"
+            )
+            plt.axvline(t_burn, label="Burn", color="k")
+            plt.axvline(t_burnout, label="Burnout", color="r")
+            plt.axvline(t_apogee, label="Apogee", color="g")
+            plt.axhline(apogee, label="Apogee", color="g")
+            plt.axhline(self.apg_target, label="Apogee Target", color="y")
+            plt.ylabel("Z Position [m]")
+            plt.title("Z-axis Estimates")
+            plt.legend()
+            plt.grid()
+
+            plt.subplot(3, 3, 6)
+            plt.plot(
+                times, self.filtered_flight_log[:, 6], label="Estimated Z Velocity"
+            )
+            plt.axvline(t_burn, label="Burn", color="k")
+            plt.axvline(t_burnout, label="Burnout", color="r")
+            plt.axvline(t_apogee, label="Apogee", color="g")
+            plt.ylabel("Z Velocity [m/s]")
+            plt.legend()
+            plt.grid()
+
+            plt.subplot(3, 3, 9)
+            plt.plot(
+                times,
+                self.filtered_flight_log[:, 12],
+                label="Raw Z Acceleration",
+                alpha=0.6,
+            )
+            plt.plot(
+                times, self.filtered_flight_log[:, 9], label="Estimated Z Acceleration"
+            )
+            plt.axvline(t_burn, label="Burn", color="k")
+            plt.axvline(t_burnout, label="Burnout", color="r")
+            plt.axvline(t_apogee, label="Apogee", color="g")
+            plt.xlabel("Time [s]")
+            plt.ylabel("Z Acceleration [m/s^2]")
+            plt.legend()
+            plt.grid()
+
+            plt.tight_layout()
+            plt.show()
+
+            # Apogee Prediction Frequency Plot
+            plt.plot(t_sim_lst, hertz_lst)
+            plt.xlabel("Time [s]")
+            plt.ylabel("Hertz [s^(-1)]")
+            plt.title("Apogee Prediction Simulation Frequency")
+            plt.grid()
+            plt.show()
 
     # __________ FUNCTIONS __________
     def temp(self, alt):  # Temperature as a function of altitude
