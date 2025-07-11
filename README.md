@@ -29,3 +29,8 @@ Functions to eliminate/combine (Apogee Class):
 F2K (converts temperature from degrees Fahrenheit to Kelvin)
 quatern2euler & euler2zenith (COMBINE, converts rotation from quaternions to euler angles and then from euler angles to zenith angle)
 quatern_prod (quaternion multiplication)
+
+
+USAGE:
+The main branch relies on the Vehicle python class in supplemental_main.py
+An example script demonstrating the code is in test.py
