@@ -234,6 +234,7 @@ class Vehicle:
 
         # __________ Flight Data __________
         # checks that there is a name - CHANGE FOR LIVE DATA
+        self.apg_target = 1550  # [m]
         if not flight_log_filename:
             if in_flight is True:
                 # HERE IS WHERE THE FUTURE PACKAGE FOR THE PI ITSELF GOES
@@ -242,6 +243,7 @@ class Vehicle:
                 raise Exception(
                     "Please specify the name of the file for the flight log."
                 )
+
         # extracting data from flight log for live processing
         else:
             flight_log = np.loadtxt(
@@ -865,7 +867,7 @@ class Vehicle:
         _, theta, phi = euler
         return np.arccos(np.cos(theta) * np.cos(phi))
 
-    def quatern_prod(a, b):
+    def quatern_prod(self, a, b):
         """
         This performs a quaternion multiplication operation. NOT COMMUTATIVE
 
