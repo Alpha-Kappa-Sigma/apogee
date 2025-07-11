@@ -302,9 +302,7 @@ class Vehicle:
                 acc_meas[2] = x
                 # Calculate euler angles and zenith angle [rad]
                 zenith_old = zenith
-                euler = self.quatern2euler(quaternion)
-                yaw, pitch, roll = euler
-                zenith = self.euler2zenith(euler)
+                zenith = self.quatern2zenith(quaternion)
                 # Body frame to global frame
                 r = Rotation.from_euler("y", np.degrees(zenith) - 90, degrees=True)
                 acc_i = r.apply(acc_meas)
@@ -829,15 +827,15 @@ class Vehicle:
         """
         return (fahrenheit - 32) / 1.8 + 273.15
 
-    def quatern2euler(self, q):  # Converts quaternion to euler angles
+    def quatern2zenith(self, q):  # Converts quaternion to euler angles
         """
-        This converts rotation values from quaternions to euler angles.
+        This converts rotation values from quaternions to the zenith angle.
 
         Args:
             q (list): quaternion vector
 
         Returns:
-            euler (yaw/psi, pitch/theta, roll/phi): euler angle for current rotation of the vehicle
+            zenith (float): current zenith angle of the vehicle
         """
         # Separating the vector components
         w, x, y, z = q
@@ -848,24 +846,13 @@ class Vehicle:
         R32 = 2 * (y * z - w * x)
         R33 = 2 * w**2 - 1 + 2 * z**2
         # Compute Euler angles
-        return (
+        __, beta, phi = (
             np.arctan2(R21, R11),
             -np.arcsin(R31),
             np.arctan2(R32, R33),
         )  # psi, beta, phi (yaw, pitch, roll)
-
-    def euler2zenith(self, euler):
-        """
-        This converts rotation values from euler angles to the zenith angle.
-
-        Args:
-            euler (list): vector of euler angles for current rotation of the vehicle
-
-        Returns:
-            zenith (float): current zenith angle of the vehicle
-        """
-        _, theta, phi = euler
-        return np.arccos(np.cos(theta) * np.cos(phi))
+        # zenith angle from euler angles
+        return np.arccos(np.cos(beta) * np.cos(phi))
 
     def quatern_prod(self, a, b):
         """

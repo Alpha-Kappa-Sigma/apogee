@@ -12,7 +12,6 @@ This branch also relies on the assumption that the provided libraries have bette
 In development is the cpp branch, which is just this exact package in C++! (more efficient but a
     lower-level language so more work for us to write it in the first place.)
 
-
 Things to work on:
 Rewrite all the files into one functional class that can be called (IN PROGRESS)
 Refine functions in Apogee class (IN PROGRESS)
