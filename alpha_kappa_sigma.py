@@ -31,14 +31,14 @@ temp (temperature as a function of altitude)
 update_kalman_filters (updates kalman filters)
 teasley_filter (alters quaternions after taking in the rotational acceleration measurements from the gyroscopic sensor on the integrated IMU)
 acceleration
+quatern2zenith (quaternion values to zenith angle for the vehicle)
 apogee
 sys_drvs
 
 Functions to eliminate/modify:
 F2K (converts temperature from degrees Fahrenheit to Kelvin)
-quatern2euler & euler2zenith (COMBINE, converts rotation from quaternions to euler angles and then from euler angles to zenith angle)
 quatern_prod (quaternion multiplication)
-rk4_step (fourth-order runge-kutta )
+rk4_step (fourth-order runge-kutta)
 """
 
 from scipy.interpolate import RegularGridInterpolator
