@@ -32,5 +32,5 @@ quatern_prod (quaternion multiplication)
 
 
 USAGE:
-The main branch relies on the Vehicle python class in supplemental_main.py
+The main branch relies on the Vehicle python class in alpha_kappa_sigma.py
 An example script demonstrating the code is in test.py

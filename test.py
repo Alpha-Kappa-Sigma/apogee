@@ -7,7 +7,7 @@ Date: 7-11-2025
 """
 
 # imports
-from supplement_main import Vehicle
+from alpha_kappa_sigma import Vehicle
 
 # filename declarations
 flight_log_filename = r"Full Scale Flight 1.csv"
