@@ -2,7 +2,7 @@ The following is the apogee prediction algorithm for the NDRT ACS Design Squad i
 
 Collaborators involved:
 Alex Kult (@Alex-Kult) - Initial author;
-Dominik Bartsch (@dominob101) - Contributor (Refinement to single file containing class);
+Dominik Bartsch (@dominob101) - Refinement and documentation;
 
 If you hope to find the original code developed by Alex Kult, see the branch alex-original
 This branch exists as a refinement for that package.
@@ -29,7 +29,6 @@ Functions to eliminate/combine (Apogee Class):
 F2K (converts temperature from degrees Fahrenheit to Kelvin)
 quatern2euler & euler2zenith (COMBINE, converts rotation from quaternions to euler angles and then from euler angles to zenith angle)
 quatern_prod (quaternion multiplication)
-
 
 USAGE:
 The main branch relies on the Vehicle python class in alpha_kappa_sigma.py
