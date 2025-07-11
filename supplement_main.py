@@ -2,7 +2,7 @@
 This singular file is intended to supplement all
 the different .py files to potentially improve efficiency.
 
-Author: Alex Kult (), Dominik Bartsch (@dominob101)
+Autho(s): Alex Kult (@Alex-Kult), Dominik Bartsch (@dominob101)
 Date: 6-24-2025
 Copyright Alpha Kappa Sigma
 
@@ -20,11 +20,11 @@ convert.py
 environment.py
 filter.py
 math_lib.py
-
-Not yet checked:
 vehicle.py
 apogee_lib.py
 apogee.py
+
+Not yet checked:
 flight.py
 
 Functions here to stay:
@@ -32,18 +32,23 @@ __init__ (initializing function, runs when you create the object/class instance)
 temp (temperature as a function of altitude)
 update_kalman_filters (updates kalman filters)
 teasley_filter (alters quaternions after taking in the rotational acceleration measurements from the gyroscopic sensor on the integrated IMU)
+acceleration
+apogee
+sys_drvs
 
-Functions to eliminate/combine:
+Functions to eliminate/modify:
 F2K (converts temperature from degrees Fahrenheit to Kelvin)
 quatern2euler & euler2zenith (COMBINE, converts rotation from quaternions to euler angles and then from euler angles to zenith angle)
 quatern_prod (quaternion multiplication)
+rk4_step (fourth-order runge-kutta )
 """
 
+from scipy.interpolate import RegularGridInterpolator
 from filterpy.kalman import KalmanFilter
 import numpy as np
 
 
-class Apogee:
+class Vehicle:
     """
     This class is intended to serve as the overarching class for the ACS apogee module,
     supplementing the collection of pythion files in the original ACS module. Accidentally deleted attempt 1.
@@ -55,11 +60,20 @@ class Apogee:
     """
 
     # --- Initialization ---
-    def __init__(self):
+    def __init__(
+        self,
+        cfd_filename: str = None,
+    ):
         """
-        The following function is run upon the declaration of the object.
+        The following method is run upon the declaration of the object.
+        It declares a lot of variables, including vehicle parameters,
+            environment parameters, wind conditions, Kalman filter
+            inputs, and general scientific constants.
+        It also initializes the Kalman filters for x, y, & z.
+        It also
 
-        attaches all the variables to the Apogee object
+        Args:
+            cfd_filename (str): name of the cfd file that is being read.
         """
         # __________ CONSTANTS __________
         # --- Inputs assigned to object ---
@@ -67,6 +81,7 @@ class Apogee:
         self.g = 9.8067  # Acceleration due to gravity [m/s^2]
         self.gamma = 1.4  # Ratio of specific heats for air
         self.R = 287.05  # Specific gas constant for air [J/(kg·K)]
+        self.t_step = 0.1
         # Conversion factors
         self.m2ft = 3.28083989501  # meters to feet
         self.mph2ms = 0.44704  # mph to m/s
@@ -167,6 +182,49 @@ class Apogee:
             [[1000.0, 0.0, 0.0], [0.0, 1000.0, 0.0], [0.0, 0.0, 10.0]]
         )
         self.last_time = None  # To store the previous timestamp for dt calculation
+
+        # __________ CFD DATA INITIALIZATION __________
+        # Input data
+        if not cfd_filename:
+            raise Exception("Please specify the name of the file for the CFD data.")
+        self.cfd_data = np.loadtxt(cfd_filename, delimiter=",", dtype=float, skiprows=1)
+        # Separates the spreadsheet by column
+        acs_angles = np.unique(self.cfd_data[:, 0])
+        atk_angles = np.unique(self.cfd_data[:, 1])
+        mach_numbers = np.unique(self.cfd_data[:, 2])
+        axial_forces = np.full(
+            (len(acs_angles), len(atk_angles), len(mach_numbers)), np.nan
+        )
+        normal_forces = np.full(
+            (len(acs_angles), len(atk_angles), len(mach_numbers)), np.nan
+        )
+        # for each i in the loop, this does...
+        for i in range(len(self.cfd_data)):
+            # uh...yeah uh...it uhhhhh...
+            acs_ang, atk_ang, mach = self.cfd_data[i, :3]
+            axial_force = self.cfd_data[i, 3]
+            normal_force = self.cfd_data[i, 4]
+            # um... *gulp* I don't know what this does
+            i_idx = np.where(acs_angles == acs_ang)[0][0]
+            j_idx = np.where(atk_angles == atk_ang)[0][0]
+            k_idx = np.where(mach_numbers == mach)[0][0]
+            # axial and normal forces?
+            axial_forces[i_idx, j_idx, k_idx] = axial_force
+            normal_forces[i_idx, j_idx, k_idx] = normal_force
+        # Ohhhhhhhh so these make interpolations for the axial and normal forces on the vehicle!
+        self.axial_interp = RegularGridInterpolator(
+            (acs_angles, atk_angles, mach_numbers),
+            axial_forces,
+            bounds_error=False,
+            fill_value=None,
+        )
+        self.normal_interp = RegularGridInterpolator(
+            (acs_angles, atk_angles, mach_numbers),
+            normal_forces,
+            bounds_error=False,
+            fill_value=None,
+        )
+        # *Audibly inhales* so pwofessow...
 
     # __________ FUNCTIONS __________
     def temp(self, alt):  # Temperature as a function of altitude
@@ -315,6 +373,123 @@ class Apogee:
         q_norm = q_new / np.linalg.norm(q_new)
         return q_norm
 
+    def acceleration(self, acs_ang, state):
+        """
+        This function acceleration and angular acceleration based on the angles?
+
+        Args:
+            acs_ang ()
+            state ()
+
+        Returns:
+            acc ()
+            ang_acc ()
+
+        """
+        # Disecting state matrix
+        alt = state[0, 0]
+        vel = state[:, 1]
+        zenith = state[2, 2]
+
+        # Gravitational Force
+        grav_acc = np.array([-self.g, 0, 0])
+
+        # Aerodynamic State
+        temp_k = self.temp(alt)
+        speed_of_sound = np.sqrt(self.gamma * self.R * temp_k)
+
+        vel_rel = vel - self.grad_wind
+        mach = np.linalg.norm(vel_rel) / speed_of_sound
+
+        # Calculate Aerodynamic Forces
+        if mach >= 0.025:
+            # Angle of Attack using zenith angle and velocity angle
+            lift_state = True
+            atk_ang = zenith - abs(np.arctan(vel_rel[1] / vel_rel[0]))
+            if atk_ang < 0:
+                lift_state = False
+            atk_ang = abs(atk_ang)
+
+            # Aerodynamic Forces and Moments
+            aero_point = np.array([acs_ang, np.degrees(atk_ang), mach])
+            axial_force_mag = self.axial_interp(aero_point)[0]
+            normal_force_mag = self.normal_interp(aero_point)[0]
+
+            axial_force = axial_force_mag * np.array(
+                [-np.cos(zenith), -np.sin(zenith), 0]
+            )
+            normal_force = normal_force_mag * np.array(
+                [-np.sin(zenith), np.cos(zenith), 0]
+            )
+
+            aero_mom = -normal_force_mag * self.cp_cg
+            aero_mom *= 0.2  # Dampening Torque (From Teasley)
+
+            ang_acc = aero_mom / self.mom_inertia
+
+            # Opposite Direction of lift force and moment if angle of attack is negative
+            if not lift_state:
+                normal_force = -normal_force
+                ang_acc = -ang_acc
+
+            aero_acc = (axial_force + normal_force) / self.dry_mass
+
+            acc = grav_acc + aero_acc
+        else:
+            acc = grav_acc
+            ang_acc = 0
+
+        return acc, ang_acc
+
+    def apogee_pred(self, state):
+        """
+        apogee prediction based on current state
+
+        Args:
+            state ()
+
+        Returns:
+            apogee ()
+        """
+        alt_lst = [state[0, 0]]
+        time = 0
+
+        while state[0, 1] > 0:
+            state = self.rk4_step(state, self.t_step)
+            time += self.t_step
+            alt_lst.append(state[0, 0])
+
+        apogee = alt_lst[-1]
+
+        return apogee
+
+    def sys_drvs(self, state):
+        """
+        This function...
+
+        Args:
+            state ()
+
+        Returns:
+            state_drv ()
+
+        """
+        vel = state[:, 1]
+        ang_vel = state[2, 3]
+        acc, ang_acc = self.acceleration(0, state)
+
+        dx_dt = vel
+        dv_dt = acc
+        dang_dt = ang_vel
+        dangvel_dt = ang_acc
+
+        state_drv = np.zeros((3, 4))
+        state_drv[:, 0] = dx_dt
+        state_drv[:, 1] = dv_dt
+        state_drv[2, 2] = dang_dt
+        state_drv[2, 3] = dangvel_dt
+        return state_drv
+
     def F2K(self, fahrenheit):
         """
         converts to kelvin from degrees fahrenheit.
@@ -368,7 +543,7 @@ class Apogee:
 
     def quatern_prod(a, b):
         """
-        This performs a quaternion multiplication operation.
+        This performs a quaternion multiplication operation. NOT COMMUTATIVE
 
         Args:
             a (NumPy array): quaternion vector (w first)
@@ -377,13 +552,31 @@ class Apogee:
         Returns:
             q (NumPy array): quaternion vector (w first)
         """
-        # Calculates the quaternion product of quaternion a and b. Not commutative.
+        # Separating vectors into components
         w1, x1, y1, z1 = a
         w2, x2, y2, z2 = b
-
+        # multiplication for each resultant value in the vector
         q1 = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
         q2 = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
         q3 = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
         q4 = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
-
         return np.array([q1, q2, q3, q4])
+
+    def rk4_step(self, state, t_step):
+        """
+        Fourth-order runge-kutta approximation of state
+
+        Args:
+            state ()
+            t_step ()
+
+        Returns:
+            state_new ()
+        """
+        # four steps
+        k1 = self.sys_drvs(state)
+        k2 = self.sys_drvs(state + 0.5 * k1 * t_step)
+        k3 = self.sys_drvs(state + 0.5 * k2 * t_step)
+        k4 = self.sys_drvs(state + k3 * t_step)
+        # final combined calculation
+        return state + t_step / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
