@@ -19,9 +19,9 @@ constants.py
 convert.py
 environment.py
 filter.py
+math_lib.py
 
 Not yet checked:
-math_lib.py
 vehicle.py
 apogee_lib.py
 apogee.py
@@ -38,16 +38,14 @@ F2K (converts temperature from degrees Fahrenheit to Kelvin)
 quatern2euler & euler2zenith (COMBINE, converts rotation from quaternions to euler angles and then from euler angles to zenith angle)
 quatern_prod (quaternion multiplication)
 """
-from scipy.interpolate import RegularGridInterpolator
-from scipy.spatial.transform import Rotation
+
 from filterpy.kalman import KalmanFilter
 import numpy as np
-import matplotlib.pyplot as plt
-import time as simtime
 
-class Apogee():
+
+class Apogee:
     """
-    This class is intended to serve as the overarching class for the ACS apogee module, 
+    This class is intended to serve as the overarching class for the ACS apogee module,
     supplementing the collection of pythion files in the original ACS module. Accidentally deleted attempt 1.
     Only gotta restart now. We good. Dw guys.
 
@@ -55,53 +53,80 @@ class Apogee():
 
     To run this code, make sure you have the numpy, matplotlib, scipy, and filterpy packages installed.
     """
+
     # --- Initialization ---
     def __init__(self):
         """
         The following function is run upon the declaration of the object.
 
-        attaches all the variables to the Apogee object 
+        attaches all the variables to the Apogee object
         """
         # __________ CONSTANTS __________
         # --- Inputs assigned to object ---
         # General constants
-        self.g = 9.8067 #Acceleration due to gravity [m/s^2]
-        self.gamma = 1.4 #Ratio of specific heats for air
-        self.R = 287.05 #Specific gas constant for air [J/(kg·K)]
+        self.g = 9.8067  # Acceleration due to gravity [m/s^2]
+        self.gamma = 1.4  # Ratio of specific heats for air
+        self.R = 287.05  # Specific gas constant for air [J/(kg·K)]
         # Conversion factors
-        self.m2ft = 3.28083989501 #meters to feet
-        self.mph2ms = 0.44704 #mph to m/s
+        self.m2ft = 3.28083989501  # meters to feet
+        self.mph2ms = 0.44704  # mph to m/s
         # Launch Conditions
-        self.temp_ground = 50 #Ground temperature [F]
-        self.wind_speed = 10 #Downrange wind speed [mph] (downrange speed is positive)
-        self.wind_direction = 270 #[deg] #*Use weather app
-        self.launch_direction = 260 #[deg] #*Use compass on phone
+        self.temp_ground = 50  # Ground temperature [F]
+        self.wind_speed = 10  # Downrange wind speed [mph] (downrange speed is positive)
+        self.wind_direction = 270  # [deg] #*Use weather app
+        self.launch_direction = 260  # [deg] #*Use compass on phone
         # Environmental Parameters
-        self.rough_len = 0.075 #[m] Roughness Length (~0.075 for harvested cropland)
-        self.grad_ht = 300 #[m] Gradient Height for open terrain and neutral stability
-        self.meas_ht = 10 #[m] Wind Speed Measurement Height (~10m for most weather stations)
+        self.rough_len = 0.075  # [m] Roughness Length (~0.075 for harvested cropland)
+        self.grad_ht = 300  # [m] Gradient Height for open terrain and neutral stability
+        self.meas_ht = (
+            10  # [m] Wind Speed Measurement Height (~10m for most weather stations)
+        )
+        # Vehicle Parameters
+        self.cp_cg = (
+            0.42  # Distance between center of gravity and center of pressure [m]
+        )
+        self.dry_mass = 17.625  # Mass of rocket after motor burn [kg]
+        self.mom_inertia = (
+            8.04  # Moment of inertial of rocket after motor burn [kg*m^2]
+        )
         # Kalman filter vars
-            # Kalman Filter Initialization (XY)
+        # Kalman Filter Initialization (XY)
         self.sigma_process_accel_xy = 0.5
         self.sigma_accel_sensor_xy = 0.5
-            # Kalman Filter Initialization (Z) (most critical for altitude/velocity)
-        self.sigma_process_accel_z = 1.0 # increase if velocity/position is still too high or drifts
-        self.sigma_accel_sensor_z = 0.5 # increase if estimated Z-accel is too noisy
-        self.sigma_altimeter_sensor = 0.5 # decrease if estimated Z-position is too noisy or not tracking altimeter well
+        # Kalman Filter Initialization (Z) (most critical for altitude/velocity)
+        self.sigma_process_accel_z = (
+            1.0  # increase if velocity/position is still too high or drifts
+        )
+        self.sigma_accel_sensor_z = 0.5  # increase if estimated Z-accel is too noisy
+        self.sigma_altimeter_sensor = 0.5  # decrease if estimated Z-position is too noisy or not tracking altimeter well
 
         # --- Calculated values assigned to object ---
         # Wind Conditions
-        self.wind_ground = self.wind_speed*self.mph2ms
-        self.wind_vector = self.wind_ground*np.array([np.cos(np.radians(self.wind_direction)), np.sin(np.radians(self.wind_direction))])
-        self.launch_vector = np.array([np.cos(np.radians(self.launch_direction)), np.sin(np.radians(self.launch_direction))])
+        self.wind_ground = self.wind_speed * self.mph2ms
+        self.wind_vector = self.wind_ground * np.array(
+            [
+                np.cos(np.radians(self.wind_direction)),
+                np.sin(np.radians(self.wind_direction)),
+            ]
+        )
+        self.launch_vector = np.array(
+            [
+                np.cos(np.radians(self.launch_direction)),
+                np.sin(np.radians(self.launch_direction)),
+            ]
+        )
         self.wind_downrange = np.dot(self.wind_vector, self.launch_vector)
         # Gradient wind speed above planetary boundary layer (100-200 meters above ground for open terrain)
-        self.grad_speed = self.wind_downrange*np.log(self.grad_ht/self.rough_len)/np.log(self.meas_ht/self.rough_len)
+        self.grad_speed = (
+            self.wind_downrange
+            * np.log(self.grad_ht / self.rough_len)
+            / np.log(self.meas_ht / self.rough_len)
+        )
         self.grad_wind = np.array([0, self.grad_speed, 0])
 
         # __________ KALMAN FILTER INITIALIZATION __________
         # --- Kalman Filter Setup for XY-axes ---
-        H_accel_only = np.array([[0., 0., 1.]])
+        H_accel_only = np.array([[0.0, 0.0, 1.0]])
         R_accel_only = np.array([[self.sigma_accel_sensor_xy**2]])
         self.kf_x = KalmanFilter(dim_x=3, dim_z=1)
         self.kf_y = KalmanFilter(dim_x=3, dim_z=1)
@@ -110,32 +135,41 @@ class Apogee():
             kf.H = H_accel_only
             kf.R = R_accel_only
             # Initial State Estimate: [0, 0, 0] (position, velocity, acceleration)
-            kf.x = np.array([[0.], [0.], [0.]])
+            kf.x = np.array([[0.0], [0.0], [0.0]])
             # Initial Error Covariance: High uncertainty to allow quick convergence
-            kf.P = np.array([[1000., 0., 0.], # Position uncertainty
-                            [0., 1000., 0.], # Velocity uncertainty
-                            [0., 0., 10.]])  # Acceleration uncertainty
+            kf.P = np.array(
+                [
+                    [1000.0, 0.0, 0.0],  # Position uncertainty
+                    [0.0, 1000.0, 0.0],  # Velocity uncertainty
+                    [0.0, 0.0, 10.0],
+                ]
+            )  # Acceleration uncertainty
         # --- Kalman Filter Setup for Z-axis (Acceleration + Altimeter) ---
         # State vector: [position, velocity, acceleration] (dim_x = 3)
         # Measurement: [acceleration, position] (dim_z = 2)
         self.kf_z = KalmanFilter(dim_x=3, dim_z=2)
         # Measurement Function Matrix (H) for Z-axis: Measures acceleration (index 2) and position (index 0)
-        self.kf_z.H = np.array([[0., 0., 1.], # Maps state[2] (acceleration) to measurement[0]
-                        [1., 0., 0.]]) # Maps state[0] (position) to measurement[1]
+        self.kf_z.H = np.array(
+            [
+                [0.0, 0.0, 1.0],  # Maps state[2] (acceleration) to measurement[0]
+                [1.0, 0.0, 0.0],
+            ]
+        )  # Maps state[0] (position) to measurement[1]
         # Measurement Noise Covariance (R) for Z-axis: 2x2 matrix for accel and altimeter
         # Assuming no correlation between accelerometer and altimeter noise
-        self.kf_z.R = np.array([[self.sigma_accel_sensor_z**2, 0.],
-                        [0., self.sigma_altimeter_sensor**2]])
+        self.kf_z.R = np.array(
+            [[self.sigma_accel_sensor_z**2, 0.0], [0.0, self.sigma_altimeter_sensor**2]]
+        )
         # Initial State Estimate for Z-axis: [0, 0, 0] (position, velocity, acceleration)
-        self.kf_z.x = np.array([[0.], [0.], [0.]])
+        self.kf_z.x = np.array([[0.0], [0.0], [0.0]])
         # Initial Error Covariance for Z-axis: High uncertainty
-        self.kf_z.P = np.array([[1000., 0., 0.],
-                        [0., 1000., 0.],
-                        [0., 0., 10.]])
-        self.last_time = None # To store the previous timestamp for dt calculation
+        self.kf_z.P = np.array(
+            [[1000.0, 0.0, 0.0], [0.0, 1000.0, 0.0], [0.0, 0.0, 10.0]]
+        )
+        self.last_time = None  # To store the previous timestamp for dt calculation
 
     # __________ FUNCTIONS __________
-    def temp(self,alt): #Temperature as a function of altitude
+    def temp(self, alt):  # Temperature as a function of altitude
         """
         Gives approximation of temperature based on altitude
         Folded in F2K function.
@@ -146,27 +180,27 @@ class Apogee():
         Returns:
             tK (float): Temperature [K]
         """
-        return ((self.temp_ground - 0.00356*alt*self.m2ft) - 32) / 1.8 + 273.15
-    
+        return ((self.temp_ground - 0.00356 * alt * self.m2ft) - 32) / 1.8 + 273.15
+
     def update_kalman_filters(
-            self,
-            kf_x, 
-            kf_y, 
-            kf_z, 
-            last_time,
-            current_time, 
-            x_accel_raw, 
-            y_accel_raw, 
-            z_accel_raw, 
-            altimeter_raw,
-            sigma_process_accel_xy, 
-            sigma_process_accel_z,
+        self,
+        kf_x,
+        kf_y,
+        kf_z,
+        last_time,
+        current_time,
+        x_accel_raw,
+        y_accel_raw,
+        z_accel_raw,
+        altimeter_raw,
+        sigma_process_accel_xy,
+        sigma_process_accel_z,
     ):
         """
         This function updates the kalman filters
 
         Args:
-            kf_x (class 'filterpy.kalman.KalmanFilter'): Kalman filter for the x-axis (acceleration only) 
+            kf_x (class 'filterpy.kalman.KalmanFilter'): Kalman filter for the x-axis (acceleration only)
             kf_y (class 'filterpy.kalman.KalmanFilter'): Kalman filter for the y-axis (acceleration only)
             kf_z (class 'filterpy.kalman.KalmanFilter'): Kalman filter for the z-axis (combining acceleration and altimeter measurements)
             last_time (int): last time stamp
@@ -177,37 +211,53 @@ class Apogee():
             altimeter_raw (float): raw altimeter data
             sigma_process_accel_xy (float): signal noise in XY
             sigma_process_accel_z (float): signal noise in Z
-        
+
         Returns:
-            kf_x (class 'filterpy.kalman.KalmanFilter'): Kalman filter for the x-axis (new) 
-            kf_y (class 'filterpy.kalman.KalmanFilter'): Kalman filter for the y-axis (new) 
-            kf_z (class 'filterpy.kalman.KalmanFilter'): Kalman filter for the z-axis (new) 
+            kf_x (class 'filterpy.kalman.KalmanFilter'): Kalman filter for the x-axis (new)
+            kf_y (class 'filterpy.kalman.KalmanFilter'): Kalman filter for the y-axis (new)
+            kf_z (class 'filterpy.kalman.KalmanFilter'): Kalman filter for the z-axis (new)
             current_time (int): current time stamp
             estimated_states (list): estimated states from the kalman filter at the current time stamp
 
         """
         if last_time is None:
-            current_dt = 0.03 # Arbitrary small initial dt
+            current_dt = 0.03  # Arbitrary small initial dt
         else:
             current_dt = current_time - last_time
 
         # Update F and Q matrices for the current dt for XY axes
-        current_F_xy = np.array([[1., current_dt, 0.5 * current_dt**2],
-                                [0., 1., current_dt],
-                                [0., 0., 1.]])
+        current_F_xy = np.array(
+            [
+                [1.0, current_dt, 0.5 * current_dt**2],
+                [0.0, 1.0, current_dt],
+                [0.0, 0.0, 1.0],
+            ]
+        )
 
-        current_Q_xy = sigma_process_accel_xy**2 * np.array([[0.25 * current_dt**4, 0.5 * current_dt**3, 0.5 * current_dt**2],
-                                                            [0.5 * current_dt**3, current_dt**2, current_dt],
-                                                            [0.5 * current_dt**2, current_dt, 1.]])
+        current_Q_xy = sigma_process_accel_xy**2 * np.array(
+            [
+                [0.25 * current_dt**4, 0.5 * current_dt**3, 0.5 * current_dt**2],
+                [0.5 * current_dt**3, current_dt**2, current_dt],
+                [0.5 * current_dt**2, current_dt, 1.0],
+            ]
+        )
 
         # Update F and Q matrices for the current dt for Z-axis
-        current_F_z = np.array([[1., current_dt, 0.5 * current_dt**2],
-                                [0., 1., current_dt],
-                                [0., 0., 1.]])
+        current_F_z = np.array(
+            [
+                [1.0, current_dt, 0.5 * current_dt**2],
+                [0.0, 1.0, current_dt],
+                [0.0, 0.0, 1.0],
+            ]
+        )
 
-        current_Q_z = sigma_process_accel_z**2 * np.array([[0.25 * current_dt**4, 0.5 * current_dt**3, 0.5 * current_dt**2],
-                                                        [0.5 * current_dt**3, current_dt**2, current_dt],
-                                                        [0.5 * current_dt**2, current_dt, 1.]])
+        current_Q_z = sigma_process_accel_z**2 * np.array(
+            [
+                [0.25 * current_dt**4, 0.5 * current_dt**3, 0.5 * current_dt**2],
+                [0.5 * current_dt**3, current_dt**2, current_dt],
+                [0.5 * current_dt**2, current_dt, 1.0],
+            ]
+        )
 
         # Assign updated F and Q to each filter
         kf_x.F = current_F_xy
@@ -227,17 +277,27 @@ class Apogee():
 
         # --- Process Z-axis (Acceleration + Altimeter) ---
         kf_z.predict()
-        combined_z_measurement = np.array([[z_accel_raw],
-                                            [altimeter_raw]])
+        combined_z_measurement = np.array([[z_accel_raw], [altimeter_raw]])
         kf_z.update(combined_z_measurement)
 
         # Return current estimated states
-        #[time, x_pos, y_pos, z_pos, x_vel, y_vel, z_vel, x_acc, y_acc, z_acc]
-        estimated_states = [current_time, kf_x.x[0, 0], kf_y.x[0, 0], kf_z.x[0, 0], kf_x.x[1, 0], kf_y.x[1, 0], kf_z.x[1, 0], kf_x.x[2, 0], kf_y.x[2, 0], kf_z.x[2, 0]]
+        # [time, x_pos, y_pos, z_pos, x_vel, y_vel, z_vel, x_acc, y_acc, z_acc]
+        estimated_states = [
+            current_time,
+            kf_x.x[0, 0],
+            kf_y.x[0, 0],
+            kf_z.x[0, 0],
+            kf_x.x[1, 0],
+            kf_y.x[1, 0],
+            kf_z.x[1, 0],
+            kf_x.x[2, 0],
+            kf_y.x[2, 0],
+            kf_z.x[2, 0],
+        ]
 
         return kf_x, kf_y, kf_z, current_time, estimated_states
-    
-    def teasley_filter(self,quat, gyro, dt): 
+
+    def teasley_filter(self, quat, gyro, dt):
         """
         This uses the gyroscope's acceleration measurements to find quaternions. Implement more advanced fusion algorithm later.
 
@@ -255,7 +315,7 @@ class Apogee():
         q_norm = q_new / np.linalg.norm(q_new)
         return q_norm
 
-    def F2K(self,fahrenheit):
+    def F2K(self, fahrenheit):
         """
         converts to kelvin from degrees fahrenheit.
 
@@ -264,11 +324,11 @@ class Apogee():
 
         Returns:
             kelvin: temperature measurement in Kelvin
-            
+
         """
         return (fahrenheit - 32) / 1.8 + 273.15
-    
-    def quatern2euler(self,q): #Converts quaternion to euler angles
+
+    def quatern2euler(self, q):  # Converts quaternion to euler angles
         """
         This converts rotation values from quaternions to euler angles.
 
@@ -287,21 +347,25 @@ class Apogee():
         R32 = 2 * (y * z - w * x)
         R33 = 2 * w**2 - 1 + 2 * z**2
         # Compute Euler angles
-        return np.arctan2(R21, R11), -np.arcsin(R31), np.arctan2(R32, R33) # psi, beta, phi (yaw, pitch, roll)
-    
-    def euler2zenith(self,euler): 
+        return (
+            np.arctan2(R21, R11),
+            -np.arcsin(R31),
+            np.arctan2(R32, R33),
+        )  # psi, beta, phi (yaw, pitch, roll)
+
+    def euler2zenith(self, euler):
         """
         This converts rotation values from euler angles to the zenith angle.
 
         Args:
             euler (list): vector of euler angles for current rotation of the vehicle
-        
+
         Returns:
             zenith (float): current zenith angle of the vehicle
         """
         _, theta, phi = euler
-        return np.arccos(np.cos(theta)*np.cos(phi))
-    
+        return np.arccos(np.cos(theta) * np.cos(phi))
+
     def quatern_prod(a, b):
         """
         This performs a quaternion multiplication operation.
@@ -321,5 +385,5 @@ class Apogee():
         q2 = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
         q3 = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
         q4 = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
-        
+
         return np.array([q1, q2, q3, q4])
